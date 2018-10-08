@@ -3,15 +3,17 @@
 #include <sdktools>
 #include <kento_csgocolors>
 
-char tags[256] = "{ORANGE}[Retake RWS]";
-#define PLUGIN_VERSION "1.0"
+char tags[] = "{ORANGE}[Retake RWS]";
+#define PLUGIN_VERSION "1.1"
+
+new String:tablename[] = "rws";
 
 char message[1024]; //Message buffer
 char dberror[255]; //database error buffer
-new PlayerDamage[256] = 0;  //Player Damage in 1 Round
-new Int:PlayerRounds[256] = Int:1; //Rounds that player joined
-new Float:rws[256] = 0.0; //The damage done by player in a session
-new Float:sessionrws[255] = 0.0; //Session RWS
+Int:PlayerDamage[256];  //Player Damage in 1 Round
+Int:PlayerRounds[256]; //Rounds that player joined
+Float:rws[256]; //The damage done by player in a session
+Float:sessionrws[255]; //Session RWS
 new String:SQLError[1024]; //SQL error buffer
 Database db;
 
@@ -42,6 +44,16 @@ public OnPluginStart()
         return;
     }else{
         PrintToServer("[Retake RWS] Succeed to connect to the database");
+        new String:tablequery[512];
+        Format( tablequery, sizeof(tablequery), "CREATE TABLE IF NOT EXISTS `%s` ( `id` int(11) NOT NULL AUTO_INCREMENT, `steam` char(255) CHARACTER SET latin1 NOT NULL, `rws` float UNSIGNED NOT NULL DEFAULT '0', `rwscount` int(10) UNSIGNED NOT NULL DEFAULT '0', PRIMARY KEY (`id`)) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;  ", tablename);
+        if(SQL_FastQuery( db, tablequery)){
+            Format( message, sizeof(message), "[Retake RWS] Succeed to create a table, table name: %s", tablename);
+            PrintToServer(message);
+        }else{
+            SQL_GetError(db, SQLError, sizeof(SQLError));
+            Format( message, sizeof(message), "[Retake RWS] Failed to create table, Error: %s", SQLError);
+            PrintToServer(message);
+        }
     }
     for (int client = 1; client <= MaxClients; client++) {
         if(IsValidClient(client)){
@@ -76,7 +88,7 @@ public Action:Event_RoundStart(Event event, const char[] name, bool dontBroadcas
             sessionrws[client] = rws[client] / float(PlayerRounds[client]);
             Format( message, sizeof(message), "Your RWS in this session: {ORANGE}%0.1f", sessionrws[client]);
             PPrintToChat(client, message);
-            PlayerDamage[client] = 0;
+            PlayerDamage[client] = Int:0;
         }
     }
     return Plugin_Continue;  
@@ -84,14 +96,15 @@ public Action:Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 
 public Action:Event_RoundEnd(Event event, const char[] name, bool dontBroadcast) 
 {
-    new winner = GetEventInt(event, "winner");
+    int winner = GetEventInt(event, "winner");
     float HighestRWS = 0.0;
     int HighestRWSPlayer = 0;
     new String:HighestRWSPlayerName[128];
     for (int client = 1; client <= MaxClients; client++) {
         if(IsValidClient(client) && GetClientTeam(client) == winner){
             int enemycount;
-            int Damage = PlayerDamage[client];
+            int Damage;
+            Damage = PlayerDamage[client];
             int playerteam = GetClientTeam(client);
             if(playerteam == 2){
                 enemycount = GetTeamClientCount(3);
@@ -123,8 +136,8 @@ public Action:Event_RoundEnd(Event event, const char[] name, bool dontBroadcast)
 }
 
 public Action:Event_OnDisconnect(Event event, const char[] name, bool dontBroadcast){
-    new clientindex;
-    new clientid;
+    int clientindex;
+    int clientid;
     clientid = GetEventInt(event, "userid");
     clientindex = GetClientOfUserId(clientid);
     if(IsValidClient(clientindex)){
@@ -200,7 +213,7 @@ void calcSessionRWS(int client,int target, const char[] target_name){
     new String:selectquery[255];
     new String:steamid[255];
     GetClientAuthId( target, AuthId_Steam2, steamid, sizeof(steamid));
-    Format(selectquery, sizeof(selectquery), "SELECT rws FROM rws WHERE steam = '%s'", steamid);
+    Format(selectquery, sizeof(selectquery), "SELECT rws FROM `%s` WHERE steam = '%s'", tablename, steamid);
     DBResultSet query = SQL_Query(db, selectquery);
     if(query == INVALID_HANDLE){
         SQL_GetError(db, SQLError, sizeof(SQLError));
@@ -229,7 +242,7 @@ void calcRWS(int client){
         float currentrws = 0.0;
         finalrws = damage/float(PlayerRounds[client]);
         new String:selectquery[255];
-        Format(selectquery, sizeof(selectquery), "SELECT rws, rwscount FROM rws WHERE steam = '%s'", steamid);
+        Format(selectquery, sizeof(selectquery), "SELECT rws, rwscount FROM `%s` WHERE steam = '%s'", tablename, steamid);
         PrintToServer(selectquery);
         DBResultSet query = SQL_Query(db, selectquery);
         if(query == INVALID_HANDLE){
@@ -241,7 +254,7 @@ void calcRWS(int client){
             SQL_GetError(db, SQLError, sizeof(SQLError));
             PrintToServer(SQLError);
             rwscount = 1;
-            Format(insertquery, sizeof(insertquery), "INSERT INTO rws (steam, rws, rwscount) VALUES ('%s', '%0.01f', '%i')", steamid, finalrws, rwscount);
+            Format(insertquery, sizeof(insertquery), "INSERT INTO `%s` (steam, rws, rwscount) VALUES ('%s', '%0.01f', '%i')", tablename,steamid, finalrws, rwscount);
             PrintToServer(insertquery);
             DBResultSet insertqueryresult = SQL_Query(db, insertquery);
             if(insertqueryresult == INVALID_HANDLE){
@@ -261,7 +274,7 @@ void calcRWS(int client){
             float newtemprws = FloatAdd(finalrws, currentrws);
             int newrwscount = rwscount + 1;
             float newrws = newtemprws/float(newrwscount);
-            Format(updatequery, sizeof(updatequery), "UPDATE rws SET rws='%0.01f', rwscount='%i' WHERE steam='%s'", newrws, newrwscount, steamid);
+            Format(updatequery, sizeof(updatequery), "UPDATE `%s` SET rws='%0.01f', rwscount='%i' WHERE steam='%s'", tablename, newrws, newrwscount, steamid);
             PrintToServer(updatequery);
             DBResultSet updatequeryresult = SQL_Query(db, updatequery);
             if(updatequeryresult == INVALID_HANDLE){
@@ -293,7 +306,7 @@ public Action:Event_DamageCounter(Event event, const char[] name, bool dontBroad
             if (postDamageHealth == 0) {
                 donedamage += preDamageHealth;
             }
-            PlayerDamage[attacker] += donedamage;
+            PlayerDamage[attacker] += Int:donedamage;
         }
     }
 }
