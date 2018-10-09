@@ -1,23 +1,27 @@
 #include <sourcemod>
 #include <cstrike>
 #include <sdktools>
+#include <autoexec>
 #include <kento_csgocolors>
 
 char tags[] = "{ORANGE}[Retake RWS]";
-#define PLUGIN_VERSION "1.1"
+#define PLUGIN_VERSION "1.2"
+#pragma newdecls required
 
-new String:tablename[] = "rws";
+char tablename[] = "rws";
 
 char message[1024]; //Message buffer
 char dberror[255]; //database error buffer
-Int:PlayerDamage[256];  //Player Damage in 1 Round
-Int:PlayerRounds[256]; //Rounds that player joined
-Float:rws[256]; //The damage done by player in a session
-Float:sessionrws[255]; //Session RWS
-new String:SQLError[1024]; //SQL error buffer
+int PlayerDamage[256];  //Player Damage in 1 Round
+int PlayerRounds[256]; //Rounds that player joined
+float rws[256]; //The damage done by player in a session
+float sessionrws[255]; //Session RWS
+char SQLError[1024]; //SQL error buffer
+int g_sMinRounds;
+ConVar g_cMinRounds;
 Database db;
 
-public Plugin:myinfo = 
+public Plugin myinfo = 
 {
     name = "[Retake] Round Win Share",
     author = "SoLo",
@@ -26,9 +30,17 @@ public Plugin:myinfo =
     url = "https://hkhbc.com"
 }
 
-public OnPluginStart()
+public void OnPluginStart()
 {
     RegConsoleCmd("sm_rws", ShowRWS, "[Retake RWS] Check RWS");
+    
+    AutoExecConfig_SetFile("retake_rws");
+    g_cMinRounds = AutoExecConfig_CreateConVar("sm_rws_minrounds",  "5", "[Retake RWS] Minimum round required for a valid RWS.");
+    AutoExecConfig(true, "retake_rws");
+    AutoExecConfig_CleanFile();
+    g_sMinRounds = g_cMinRounds.IntValue;
+    HookConVarChange(g_cMinRounds, OnCvarChanged);
+    
     HookEvent("player_hurt", Event_DamageCounter, EventHookMode_Pre);
     HookEvent("player_disconnect", Event_OnDisconnect, EventHookMode_Pre);
     HookEvent("round_start", Event_RoundStart);
@@ -44,14 +56,14 @@ public OnPluginStart()
         return;
     }else{
         PrintToServer("[Retake RWS] Succeed to connect to the database");
-        new String:tablequery[512];
+        char tablequery[512];
         Format( tablequery, sizeof(tablequery), "CREATE TABLE IF NOT EXISTS `%s` ( `id` int(11) NOT NULL AUTO_INCREMENT, `steam` char(255) CHARACTER SET latin1 NOT NULL, `rws` float UNSIGNED NOT NULL DEFAULT '0', `rwscount` int(10) UNSIGNED NOT NULL DEFAULT '0', PRIMARY KEY (`id`)) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;  ", tablename);
         if(SQL_FastQuery( db, tablequery)){
-            Format( message, sizeof(message), "[Retake RWS] Succeed to create a table, table name: %s", tablename);
+            Format( message, sizeof(message), "[Retake RWS] Succeed to access the table, table name: %s", tablename);
             PrintToServer(message);
         }else{
             SQL_GetError(db, SQLError, sizeof(SQLError));
-            Format( message, sizeof(message), "[Retake RWS] Failed to create table, Error: %s", SQLError);
+            Format( message, sizeof(message), "[Retake RWS] Failed to access the table, Error: %s", SQLError);
             PrintToServer(message);
         }
     }
@@ -62,44 +74,50 @@ public OnPluginStart()
     }
 }
 
-public OnClientPutInServer(client){
+public void OnCvarChanged(Handle cvar, const char[] oldValue, const char[] newValue){
+    if (cvar == g_cMinRounds) {
+        g_sMinRounds = g_cMinRounds.IntValue;
+    }
+}
+
+public void OnClientPutInServer(int client){
     resetClientRWS(client);
 }
 
-public Action:Event_GameEnd(Event event, const char[] name, bool dontBroadcast){
+public Action Event_GameEnd(Event event, const char[] name, bool dontBroadcast){
     PPrintToChatAll("{GREEN}- Match End -");
     PPrintToChatAll("Your RWS has been uploaded to our database.");
     for (int client = 1; client <= MaxClients; client++) {
         if(IsValidClient(client)){
             calcRWS(client);
-            PlayerRounds[client] = Int:0;
+            PlayerRounds[client] = view_as<int>(0);
         }
     }
 }
 
-public Action:Event_RoundStart(Event event, const char[] name, bool dontBroadcast) 
+public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcast) 
 {
     for (int client = 1; client <= MaxClients; client++) {
         if(IsValidClient(client)){
-            if(!(PlayerRounds[client] > Int:0)){
-                PlayerRounds[client] = Int:1;
+            if(!(PlayerRounds[client] > view_as<int>(0))){
+                PlayerRounds[client] = view_as<int>(1);
             }
 
             sessionrws[client] = rws[client] / float(PlayerRounds[client]);
             Format( message, sizeof(message), "Your RWS in this session: {ORANGE}%0.1f", sessionrws[client]);
             PPrintToChat(client, message);
-            PlayerDamage[client] = Int:0;
+            PlayerDamage[client] = view_as<int>(0);
         }
     }
     return Plugin_Continue;  
 } 
 
-public Action:Event_RoundEnd(Event event, const char[] name, bool dontBroadcast) 
+public Action Event_RoundEnd(Event event, const char[] name, bool dontBroadcast) 
 {
     int winner = GetEventInt(event, "winner");
     float HighestRWS = 0.0;
     int HighestRWSPlayer = 0;
-    new String:HighestRWSPlayerName[128];
+    char HighestRWSPlayerName[128];
     for (int client = 1; client <= MaxClients; client++) {
         if(IsValidClient(client) && GetClientTeam(client) == winner){
             int enemycount;
@@ -115,12 +133,12 @@ public Action:Event_RoundEnd(Event event, const char[] name, bool dontBroadcast)
                 enemycount = 1;
             }
             float totalHealth = float(enemycount)*100.0; //getTeamRWS
-            float base = Float:(float(Damage)/Float:totalHealth)*100.0; //RWS
+            float base = view_as<float>((float(Damage))/view_as<float>(totalHealth))*100.0; //RWS
             if(base > HighestRWS){
                 HighestRWS = base;
                 HighestRWSPlayer = client;
             }
-            Float:rws[client] = FloatAdd(Float:rws[client], Float:base);
+            view_as<float>(rws[client]) = FloatAdd(view_as<float>(rws[client]), view_as<float>(base));
             if(rws[client] > 100.0){
                 LogError(message);
             }
@@ -135,7 +153,7 @@ public Action:Event_RoundEnd(Event event, const char[] name, bool dontBroadcast)
     return Plugin_Continue;  
 }
 
-public Action:Event_OnDisconnect(Event event, const char[] name, bool dontBroadcast){
+public Action Event_OnDisconnect(Event event, const char[] name, bool dontBroadcast){
     int clientindex;
     int clientid;
     clientid = GetEventInt(event, "userid");
@@ -146,7 +164,7 @@ public Action:Event_OnDisconnect(Event event, const char[] name, bool dontBroadc
     return Plugin_Handled;
 }
 
-public Action:ShowRWS(int client, int args){
+public Action ShowRWS(int client, int args){
     if( args < 1){
         calcSessionRWS( client, client, "Your");
     }else{
@@ -210,8 +228,8 @@ public Action:ShowRWS(int client, int args){
 }
 
 void calcSessionRWS(int client,int target, const char[] target_name){
-    new String:selectquery[255];
-    new String:steamid[255];
+    char selectquery[255];
+    char steamid[255];
     GetClientAuthId( target, AuthId_Steam2, steamid, sizeof(steamid));
     Format(selectquery, sizeof(selectquery), "SELECT rws FROM `%s` WHERE steam = '%s'", tablename, steamid);
     DBResultSet query = SQL_Query(db, selectquery);
@@ -219,7 +237,7 @@ void calcSessionRWS(int client,int target, const char[] target_name){
         SQL_GetError(db, SQLError, sizeof(SQLError));
         PrintToServer(SQLError);
     }else{
-        new String:playerrwss[128];
+        char playerrwss[128];
         while(SQL_FetchRow(query)){
             SQL_FetchString(query, 0, playerrwss, sizeof(playerrwss));
         }
@@ -233,38 +251,34 @@ void calcRWS(int client){
     float damage;
     float finalrws;
     damage = rws[client];
-    new String:steamid[255];
+    char steamid[255];
     GetClientAuthId( client, AuthId_Steam2, steamid, sizeof(steamid));
-    if(PlayerRounds[client] <= Int:0){
-        LogError("[RWS] Error: Round is 0");
-    }else{
+    if(PlayerRounds[client] >= g_sMinRounds){
         int rwscount = 0;
         float currentrws = 0.0;
         finalrws = damage/float(PlayerRounds[client]);
-        new String:selectquery[255];
+        char selectquery[255];
         Format(selectquery, sizeof(selectquery), "SELECT rws, rwscount FROM `%s` WHERE steam = '%s'", tablename, steamid);
-        PrintToServer(selectquery);
         DBResultSet query = SQL_Query(db, selectquery);
         if(query == INVALID_HANDLE){
             SQL_GetError(db, SQLError, sizeof(SQLError));
             PrintToServer(SQLError);
         }
         if(SQL_GetRowCount(query) == 0){
-            new String:insertquery[255];
+            char insertquery[255];
             SQL_GetError(db, SQLError, sizeof(SQLError));
             PrintToServer(SQLError);
             rwscount = 1;
             Format(insertquery, sizeof(insertquery), "INSERT INTO `%s` (steam, rws, rwscount) VALUES ('%s', '%0.01f', '%i')", tablename,steamid, finalrws, rwscount);
-            PrintToServer(insertquery);
             DBResultSet insertqueryresult = SQL_Query(db, insertquery);
             if(insertqueryresult == INVALID_HANDLE){
             SQL_GetError(db, SQLError, sizeof(SQLError));
             PrintToServer(SQLError);
             }
         }else{
-            new String:temprws[255];
-            new String:temprwscount[255];
-            new String:updatequery[255];
+            char temprws[255];
+            char temprwscount[255];
+            char updatequery[255];
             while(SQL_FetchRow(query)){
                 SQL_FetchString(query, 0, temprws, sizeof(temprws));
                 SQL_FetchString(query, 1, temprwscount, sizeof(temprwscount));
@@ -275,25 +289,24 @@ void calcRWS(int client){
             int newrwscount = rwscount + 1;
             float newrws = newtemprws/float(newrwscount);
             Format(updatequery, sizeof(updatequery), "UPDATE `%s` SET rws='%0.01f', rwscount='%i' WHERE steam='%s'", tablename, newrws, newrwscount, steamid);
-            PrintToServer(updatequery);
             DBResultSet updatequeryresult = SQL_Query(db, updatequery);
             if(updatequeryresult == INVALID_HANDLE){
                 SQL_GetError(db, SQLError, sizeof(SQLError));
                 PrintToServer(SQLError);
             }
         }
+        resetClientRWS(client);
     }
-    resetClientRWS(client);
 }
 
 void resetClientRWS(int client){
     PPrintToChat( client, "Your Session RWS has been reset.");
-    PlayerRounds[client] = Int:1;
+    PlayerRounds[client] = view_as<int>(1);
     sessionrws[client] = 0.0;
     rws[client] = 0.0;
 }
 
-public Action:Event_DamageCounter(Event event, const char[] name, bool dontBroadcast){
+public Action Event_DamageCounter(Event event, const char[] name, bool dontBroadcast){
     int attacker = GetClientOfUserId(event.GetInt("attacker"));
     if(IsValidClient(attacker)){
         int victim = GetClientOfUserId(event.GetInt("userid"));
@@ -306,7 +319,7 @@ public Action:Event_DamageCounter(Event event, const char[] name, bool dontBroad
             if (postDamageHealth == 0) {
                 donedamage += preDamageHealth;
             }
-            PlayerDamage[attacker] += Int:donedamage;
+            PlayerDamage[attacker] += view_as<int>(donedamage);
         }
     }
 }
@@ -323,7 +336,7 @@ void PPrintToChatAll(char[] cmessage){
     CPrintToChatAll(smessage);
 }
 
-stock bool:IsValidClient(client, bool:nobots = true)
+stock bool IsValidClient( int client, bool nobots = true)
 { 
     if (client <= 0 || client > MaxClients || !IsClientConnected(client) || (nobots && IsFakeClient(client)))
     {
